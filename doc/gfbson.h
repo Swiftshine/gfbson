@@ -71,9 +71,16 @@ struct StartFileEntry : EntryBase {
 };
 
 // 0x8
-struct IntFileEntry : EntryBase {
+struct IntEntry : EntryBase {
     uint32_t mLabelIndex;
     int32_t mValue;
+    NextEntityType mNextType;
+};
+
+// 0x8
+struct StringEntry : EntryBase {
+    uint32_t mLabelIndex;
+    uint32_t mValueIndex;
     NextEntityType mNextType;
 };
 
