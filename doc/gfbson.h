@@ -44,23 +44,31 @@ enum EntityFlags {
 
 // The type of the next entity in an object.
 enum NextEntityType : uint32_t {
-    /// @brief The next entity should be interpreted as a signed 4-byte integer.
+    // The next entity should be interpreted as a signed 4-byte integer.
     Int = 0x12F,
 
-    /// @brief The next entity should be interpreted as a UTF-8 string.
+    // The next entity should be interpreted as a UTF-8 string.
     String = 0x131,
 
 
-    /// @brief The next entity should be interpreted as an object.
+    // The next entity should be interpreted as an object.
     Object = 0x12D,
 
-    /// @brief The next entry should be interpreted as an array.
+    // The next entity should be interpreted as an array.
     Array = 0x12E,
+
+    // The next entity is a string bank.
+    StringBank = 0x1F4,
 };
 
 /* Object Entries */
 struct EntryBase {
     uint32_t mFlags;
+};
+
+struct StringBank {
+    uint32_t mNumChars; // padded to 0x4
+    // char mStrings[mNumChars];
 };
 
 // 0x2
