@@ -1,7 +1,7 @@
 #include <iostream>
-#include "gfbson.h"
+#include "gfbson.hpp"
 
-Node BSON::ReadNode() {
+std::unique_ptr<NodeBase> BSON::ReadNode() {
     uint32_t type = mCursor.Read32();
     uint32_t size = mCursor.Read32();
 
@@ -10,31 +10,31 @@ Node BSON::ReadNode() {
             RootNode node;
             node.mType = type;
             node.mContentsSize = size;
-            return node;
+            return std::make_unique<RootNode>(node);
         }
 
         case NodeType::Object: {
             ObjectNode node;
             node.mType = type;
             node.mContentsSize = size;
-            node.Read(mCursor);
-            return node;
+            node.Read(this, mCursor);
+            return std::make_unique<ObjectNode>(std::move(node));
         }
 
-        // case NodeType::Array: {
-        //     ArrayNode node;
-        //     node.mType = type;
-        //     node.mContentsSize = size;
-        //     node.Read(this, mCursor);
-        //     return node;
-        // }
+        case NodeType::Array: {
+            ArrayNode node;
+            node.mType = type;
+            node.mContentsSize = size;
+            node.Read(this, mCursor);
+            return std::make_unique<ArrayNode>(std::move(node));
+        }
 
         case NodeType::Integer: {
             IntegerNode node;
             node.mType = type;
             node.mContentsSize = size;
             node.Read(mCursor);
-            return node;
+            return std::make_unique<IntegerNode>(node);
         }
 
         case NodeType::String: {
@@ -42,16 +42,31 @@ Node BSON::ReadNode() {
             node.mType = type;
             node.mContentsSize = size;
             node.Read(mCursor);
-            return node;
+            return std::make_unique<StringNode>(node);
         }
+
+        case NodeType::StringTable: {
+            StringTable node;
+            node.mType = type;
+            node.mContentsSize = size;
+            node.Read(mCursor);
+            return std::make_unique<StringTable>(node);
+        };
 
         case NodeType::StringBank: {
             StringBank node;
             node.mType = type;
             node.mContentsSize = size;
             node.Read(mCursor);
-            return node;
+            return std::make_unique<StringBank>(node);
         };
+
+        case NodeType::EndOfFile: {
+            EOFNode node;
+            node.mType = type;
+            node.mContentsSize = size;
+            return std::make_unique<EOFNode>(node);
+        }
 
         default: {
             NodeBase node;
@@ -61,7 +76,7 @@ Node BSON::ReadNode() {
             // skip unk bytes
             mCursor.Seek(size);
 
-            return node;
+            return std::make_unique<NodeBase>(node);
         }
     }
 }
@@ -70,30 +85,30 @@ void BSON::Parse() {
     // skip header
     mCursor.SeekTo(0x10);
 
-    size_t bankIndex = -1u;
+    StringTable* stringTable = nullptr;
+    bool tableSet = false;
+
     while (mCursor.Pos() < mFilesize) {
-        Node node = ReadNode();
-        mNodes.push_back(node);
+        mNodes.push_back(ReadNode());
 
-        if (const StringBank* pBank = std::get_if<StringBank>(&node)) {
-            mStrings = pBank->mStrings;
-            bankIndex = mNodes.size() - 1;
-        } // there should only ever be one string bank
+        const auto& node = mNodes.back();
+
+        if (node->mType == static_cast<uint32_t>(NodeType::EndOfFile)) {
+            break;
+        }
+
+
+        if (node->mType == static_cast<uint32_t>(NodeType::StringTable)) {
+            stringTable = dynamic_cast<StringTable*>(node.get());
+        } else if (node->mType == static_cast<uint32_t>(NodeType::StringBank) && stringTable != nullptr && !tableSet) {
+            stringTable->mStringBank = dynamic_cast<StringBank*>(node.get());
+            tableSet = true;
+        }
     }
 
-    StringBank* pBank = nullptr;
-    if (bankIndex != -1u) {
-        pBank = &std::get<StringBank>(mNodes[bankIndex]);
-    }
-
-    std::cout << "test\n";
     // print each node
 
-    for (Node& node : mNodes) {
-        std::visit([pBank](const auto& arg) {
-        std::string type = arg.GetType();
-        std::string str = arg.Format(pBank);
-        std::cout << std::format("{}: {}", type, str) << std::endl; 
-        }, node);
+    for (const auto& node : mNodes) {
+        std::cout << node->Format(stringTable) << std::endl;
     }
 }

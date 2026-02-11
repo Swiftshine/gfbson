@@ -4,7 +4,7 @@
 #include <vector>
 #include <iomanip>
 
-#include "gfbson.h"
+#include "gfbson.hpp"
 
 int main(int argc, char* argv[]) {
     if (argc != 2) {
