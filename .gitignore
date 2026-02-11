@@ -4,3 +4,4 @@
 scratch/
 *.out
 .DS_Store
+deps/

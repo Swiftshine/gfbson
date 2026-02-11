@@ -19,5 +19,7 @@ int main(int argc, char* argv[]) {
     BSON bson(file.data(), file.size());
     bson.Parse();
 
+    std::cout << bson.ToJSON() << std::endl;
+
     return EXIT_SUCCESS;
 }

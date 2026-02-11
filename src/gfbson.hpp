@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "cursor.hpp"
+#include "deps/json.hpp" // https://github.com/nlohmann/json
 
 inline std::string Indent(int depth) {
     return std::string(depth * 2, ' ');
@@ -46,22 +47,27 @@ struct NodeBase {
     uint32_t mContentsSize;
 };
 
+using json = nlohmann::json;
+
 class BSON {
 public:
     BSON(void* pFile, size_t size)
         : mCursor(pFile)
         , mFilesize(size)
         , mNodes()
+        , mStringTable(nullptr)
     { }
 
     std::unique_ptr<NodeBase> ReadNode();
     void Parse();
+    std::string ToJSON() const;
+    void ProcessNode(json& parent, const std::unique_ptr<NodeBase>& pNode) const;
 private:
     Cursor mCursor;
     size_t mFilesize;
     std::vector<std::unique_ptr<NodeBase>> mNodes;
+    StringTable* mStringTable;
 };
-
 
 struct StringInfo {
     void Read(Cursor& rCursor) {
@@ -83,7 +89,11 @@ struct StringBank final : NodeBase {
     }
 
     std::string GetString(const StringInfo& rInfo) const {
-        return std::string(mData.data() + rInfo.mStringBankOffset, rInfo.mStringLength);
+        if (rInfo.mStringLength == 0) {
+            return "";
+        }
+
+        return std::string(mData.data() + rInfo.mStringBankOffset, rInfo.mStringLength - 1);
     }
 
     // not the way it's really stored but necessary for c++ rep
@@ -129,7 +139,7 @@ struct RootNode final : NodeBase {
 
 struct ObjectNode final : NodeBase {
     void Read(BSON* pBSON, Cursor& rCursor) {
-        mNameIndex = rCursor.Read32();
+        mKeyIndex = rCursor.Read32();
         mNumNodes = rCursor.Read32();
 
         for (uint32_t i = 0; i < mNumNodes; i++) {
@@ -138,7 +148,7 @@ struct ObjectNode final : NodeBase {
     }
 
     std::string Format(StringTable* pStringTable, int depth = 0) const override {
-        std::string result = std::format("[Object]: Name: \"{}\", Contents: {{", pStringTable->GetString(mNameIndex));
+        std::string result = std::format("[Object]: Name: \"{}\", Contents: {{", pStringTable->GetString(mKeyIndex));
 
         if (mNodes.empty()) {
             return result + '}';
@@ -151,7 +161,7 @@ struct ObjectNode final : NodeBase {
         return result + "\n" + Indent(depth) + '}';
     }
 
-    uint32_t mNameIndex;
+    uint32_t mKeyIndex;
     uint32_t mNumNodes;
 
     std::vector<std::unique_ptr<NodeBase>> mNodes;
@@ -159,7 +169,7 @@ struct ObjectNode final : NodeBase {
 
 struct ArrayNode final : NodeBase {
     void Read(BSON* pBSON, Cursor& rCursor) {
-        mNameIndex = rCursor.Read32();
+        mKeyIndex = rCursor.Read32();
         mNumNodes = rCursor.Read32();
 
         for (uint32_t i = 0; i < mNumNodes; i++) {
@@ -168,7 +178,7 @@ struct ArrayNode final : NodeBase {
     }
 
     std::string Format(StringTable* pStringTable, int depth = 0) const {
-        std::string result = std::format("[Array]: Name: \"{}\", Contents: [", pStringTable->GetString(mNameIndex));
+        std::string result = std::format("[Array]: Name: \"{}\", Contents: [", pStringTable->GetString(mKeyIndex));
 
         if (mNodes.empty()) {
             return result + '}';
@@ -181,7 +191,7 @@ struct ArrayNode final : NodeBase {
         return result + "\n" + Indent(depth) + ']';
     }
 
-    uint32_t mNameIndex;
+    uint32_t mKeyIndex;
     uint32_t mNumNodes;
 
     // not stored this way but necessary for C++ rep
@@ -214,6 +224,10 @@ struct StringNode final : NodeBase {
 
     uint32_t mKeyIndex; // in the string bank
     uint32_t mValueIndex; // in the string bank
+};
+
+struct KeyedNode final : NodeBase {
+    uint32_t mKeyIndex;
 };
 
 struct EOFNode final : NodeBase {
