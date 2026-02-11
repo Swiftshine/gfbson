@@ -12,6 +12,10 @@
 
 #include "cursor.hpp"
 
+inline std::string Indent(int depth) {
+    return std::string(depth * 2, ' ');
+}
+
 enum class NodeType : uint32_t {
     Root        = 300,
     Object      = 301,
@@ -34,7 +38,7 @@ struct StringTable;
 struct NodeBase {
     virtual ~NodeBase() = default;
 
-    virtual std::string Format(StringTable* pStringTable) const {
+    virtual std::string Format(StringTable* pStringTable, int depth = 0) const {
         return std::format("[Node type {}]", mType);
     }
 
@@ -74,7 +78,7 @@ struct StringBank final : NodeBase {
         mData = rCursor.ReadBytes(mContentsSize);
     }
 
-    std::string Format(StringTable* pStringTable) const override {
+    std::string Format(StringTable* pStringTable, int depth = 0) const override {
         return ""; // should already be handled by the string table
     }
 
@@ -97,11 +101,11 @@ struct StringTable final : NodeBase {
         }
     }
 
-    std::string Format(StringTable* pStringTable) const override {
+    std::string Format(StringTable* pStringTable, int depth = 0) const override {
         std::string result = "[String Table]: ";
 
         for (uint32_t i = 0; i < mStringInfos.size(); i++) {
-            result += std::format("\n\t[{}] \"{}\"", i, mStringBank->GetString(mStringInfos[i]));
+            result += std::format("\n  [{}] \"{}\"", i, mStringBank->GetString(mStringInfos[i]));
         }
 
         return result;
@@ -118,7 +122,7 @@ struct StringTable final : NodeBase {
 
 
 struct RootNode final : NodeBase {
-    std::string Format(StringTable* pStringTable) const override {
+    std::string Format(StringTable* pStringTable, int depth = 0) const override {
         return "<root>";
     }
 };
@@ -133,15 +137,18 @@ struct ObjectNode final : NodeBase {
         }
     }
 
-    std::string Format(StringTable* pStringTable) const override {
-        // return std::format("Name: \"{}\", # of Nodes: {}", pStringBank->GetString(mNameIndex), mNumNodes);
-        std::string result = std::format("[Object]: Name: \"{}\", Nodes:", pStringTable->GetString(mNameIndex));
+    std::string Format(StringTable* pStringTable, int depth = 0) const override {
+        std::string result = std::format("[Object]: Name: \"{}\", Contents: {{", pStringTable->GetString(mNameIndex));
 
-        for (const std::unique_ptr<NodeBase>& node : mNodes) {
-            result += "\n\t" + node->Format(pStringTable);
+        if (mNodes.empty()) {
+            return result + '}';
         }
 
-        return result;
+        for (const std::unique_ptr<NodeBase>& node : mNodes) {
+            result += "\n" + Indent(depth + 1) + node->Format(pStringTable, depth + 1);
+        }
+
+        return result + "\n" + Indent(depth) + '}';
     }
 
     uint32_t mNameIndex;
@@ -160,14 +167,18 @@ struct ArrayNode final : NodeBase {
         }
     }
 
-    std::string Format(StringTable* pStringTable) const {
-        std::string result = std::format("[Array]: Name: \"{}\", Nodes:", pStringTable->GetString(mNameIndex));
+    std::string Format(StringTable* pStringTable, int depth = 0) const {
+        std::string result = std::format("[Array]: Name: \"{}\", Contents: [", pStringTable->GetString(mNameIndex));
 
-        for (const std::unique_ptr<NodeBase>& node : mNodes) {
-            result += "\n\t" + node->Format(pStringTable);
+        if (mNodes.empty()) {
+            return result + '}';
         }
 
-        return result;
+        for (const std::unique_ptr<NodeBase>& node : mNodes) {
+            result += "\n" + Indent(depth + 1) + node->Format(pStringTable, depth + 1);
+        }
+
+        return result + "\n" + Indent(depth) + ']';
     }
 
     uint32_t mNameIndex;
@@ -183,7 +194,7 @@ struct IntegerNode final : NodeBase {
         mValue = static_cast<int32_t>(rCursor.Read32());
     }
 
-    std::string Format(StringTable* pStringTable) const override {
+    std::string Format(StringTable* pStringTable, int depth = 0) const override {
         return std::format("[Integer]: Key: \"{}\", Value: {}", pStringTable->GetString(mKeyIndex), mValue);
     }
 
@@ -197,7 +208,7 @@ struct StringNode final : NodeBase {
         mValueIndex = rCursor.Read32();
     }
 
-    std::string Format(StringTable* pStringTable) const override {
+    std::string Format(StringTable* pStringTable, int depth = 0) const override {
         return std::format("[String]: Key: \"{}\", Value: \"{}\"", pStringTable->GetString(mKeyIndex), pStringTable->GetString(mValueIndex));
     }
 
@@ -206,7 +217,7 @@ struct StringNode final : NodeBase {
 };
 
 struct EOFNode final : NodeBase {
-    std::string Format(StringTable* pStringTable) const override {
+    std::string Format(StringTable* pStringTable, int depth = 0) const override {
         return "<EOF>";
     }
 };
