@@ -271,6 +271,7 @@ pub fn read(data: &[u8], endian: Endianness) -> GFBSONResult<Root> {
 }
 
 #[cfg(feature = "json")]
+/// Reads JSON and converts it into a BSON root node.
 pub fn from_json(json_str: &str) -> Result<Root, serde_json::Error> {
     let v: serde_json::Value = serde_json::from_str(json_str)?;
     Ok(Root::from_json_value(v))
@@ -518,6 +519,7 @@ pub fn write(root: &Root, version: u32, endian: Endianness) -> GFBSONResult<Vec<
 }
 
 #[cfg(feature = "json")]
+/// Parses a BSON root node into JSON.
 pub fn to_json(root: &Root, pretty: bool) -> serde_json::Result<String> {
     if pretty {
         serde_json::to_string_pretty(root)
