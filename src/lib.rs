@@ -1,4 +1,6 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap, ser::SerializeSeq};
 use std::{
     collections::HashMap,
     io::{Cursor, Seek, Write},
@@ -227,6 +229,11 @@ pub fn read(data: &[u8]) -> GFBSONResult<Root> {
     Reader::new(data).read_root()
 }
 
+#[cfg(feature = "json")]
+pub fn from_json(json_str: &str) -> serde_json::Result<Root> {
+    serde_json::from_str(json_str)
+}
+
 /* Writing */
 
 #[derive(Debug)]
@@ -405,6 +412,15 @@ pub fn write(root: &Root, version: u32) -> GFBSONResult<Vec<u8>> {
     Writer::new().write(root, version)
 }
 
+#[cfg(feature = "json")]
+pub fn to_json(root: &Root, pretty: bool) -> serde_json::Result<String> {
+    if pretty {
+        serde_json::to_string_pretty(root)
+    } else {
+        serde_json::to_string(root)
+    }
+}
+
 /* Intermediate Structures */
 
 #[derive(Debug)]
@@ -451,11 +467,25 @@ impl TryFrom<u32> for RawNodeType {
 /* Data */
 
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
 pub struct Root {
     pub object_node: Node,
 }
 
+#[cfg(feature = "serde")]
+impl Serialize for Root {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // don't show the object node's name
+        self.object_node.serialize(serializer)
+    }
+}
+
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "type", rename_all = "lowercase"))]
 pub enum Node {
     /// An object containing other nodes.
     Object { key: String, nodes: Vec<Node> },
@@ -469,4 +499,46 @@ pub enum Node {
     String { key: String, value: String },
     /// A bool.
     Bool { key: String, value: bool },
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for Node {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Node::Object { nodes, .. } => {
+                let mut map = serializer.serialize_map(Some(nodes.len()))?;
+                for node in nodes {
+                    map.serialize_entry(node.key(), node)?;
+                }
+                map.end()
+            }
+            Node::Array { nodes, .. } => {
+                let mut seq = serializer.serialize_seq(Some(nodes.len()))?;
+                for node in nodes {
+                    seq.serialize_element(node)?;
+                }
+                seq.end()
+            }
+            Node::Integer { value, .. } => serializer.serialize_i32(*value),
+            Node::Float { value, .. } => serializer.serialize_f32(*value),
+            Node::String { value, .. } => serializer.serialize_str(value),
+            Node::Bool { value, .. } => serializer.serialize_bool(*value),
+        }
+    }
+}
+
+impl Node {
+    pub fn key(&self) -> &str {
+        match self {
+            Node::Object { key, .. }
+            | Node::Array { key, .. }
+            | Node::Integer { key, .. }
+            | Node::Float { key, .. }
+            | Node::String { key, .. }
+            | Node::Bool { key, .. } => key,
+        }
+    }
 }
