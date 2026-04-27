@@ -4,13 +4,13 @@ A Rust crate for parsing Good-Feel's BSON files.
 
 ## Features
 
-- [ ] Binary Files
+- [x] Binary Files
     - [x] Reading
         - [x] Big Endian
-        - [ ] Little Endian
+        - [x] Little Endian
     - [x] Writing
         - [x] Big Endian
-        - [ ] Little Endian
+        - [x] Little Endian
 - [x] JSON Files
     - [x] Reading
     - [x] Writing
