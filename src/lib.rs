@@ -1,11 +1,12 @@
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap, ser::SerializeSeq};
 use std::{
     collections::HashMap,
-    io::{Cursor, Seek, Write},
+    io::{Cursor, Read, Seek, Write},
 };
 
+const BSON_VERSION: u32 = 3;
 const PLACEHOLDER_VALUE: u32 = 0xDEADCAFE;
 
 /* Utility */
@@ -22,35 +23,59 @@ pub enum GFBSONError {
     UnexpectedNodeType { expected: u32, found: u32 },
     #[error("invalid string index. found [{found}], but there are only [{count}] elements")]
     InvalidStringIndex { found: usize, count: usize },
+    #[error("cannot use automatic endianness when writing.")]
+    NoAutoEndian,
 }
 
 pub type GFBSONResult<T> = Result<T, GFBSONError>;
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Endianness {
+    #[default]
+    Auto,
+    Big,
+    Little,
+}
 
 /* Reading */
 
 struct Reader<'a> {
     cursor: Cursor<&'a [u8]>,
     strings: Vec<String>,
+    endian: Endianness,
 }
 
 impl<'a> Reader<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    fn new(data: &'a [u8], endian: Endianness) -> Self {
         Self {
             cursor: Cursor::new(data),
             strings: Vec::new(),
+            endian,
         }
     }
 
     fn read_u32(&mut self) -> GFBSONResult<u32> {
-        Ok(self.cursor.read_u32::<BigEndian>()?)
+        match self.endian {
+            Endianness::Big => Ok(self.cursor.read_u32::<BigEndian>()?),
+            Endianness::Little => Ok(self.cursor.read_u32::<LittleEndian>()?),
+            _ => unreachable!(),
+        }
     }
 
     fn read_i32(&mut self) -> GFBSONResult<i32> {
-        Ok(self.cursor.read_i32::<BigEndian>()?)
+        match self.endian {
+            Endianness::Big => Ok(self.cursor.read_i32::<BigEndian>()?),
+            Endianness::Little => Ok(self.cursor.read_i32::<LittleEndian>()?),
+            _ => unreachable!(),
+        }
     }
 
     fn read_f32(&mut self) -> GFBSONResult<f32> {
-        Ok(self.cursor.read_f32::<BigEndian>()?)
+        match self.endian {
+            Endianness::Big => Ok(self.cursor.read_f32::<BigEndian>()?),
+            Endianness::Little => Ok(self.cursor.read_f32::<LittleEndian>()?),
+            _ => unreachable!(),
+        }
     }
 
     fn set_position(&mut self, position: u64) {
@@ -84,13 +109,28 @@ impl<'a> Reader<'a> {
     }
 
     fn read_root(mut self) -> GFBSONResult<Root> {
-        let magic = self.read_u32()?.to_be_bytes();
+        let magic = {
+            let mut m = [0u8; 4];
+            self.cursor.read_exact(&mut m)?;
+            m
+        };
 
         if &magic != b"BSON" {
             return Err(GFBSONError::InvalidMagicError);
         }
 
-        self.skip(4); // version?
+        if matches!(self.endian, Endianness::Auto) {
+            let raw_version = self.cursor.read_u32::<BigEndian>()?;
+
+            self.endian = if raw_version == BSON_VERSION {
+                Endianness::Big
+            } else {
+                Endianness::Little
+            };
+        } else {
+            self.skip(4);
+        }
+
         let node_offset = self.read_u32()?;
         self.skip(4); // size of entire BSON file
         self.strings = self.read_strings(node_offset)?;
@@ -225,8 +265,9 @@ impl<'a> Reader<'a> {
     }
 }
 
-pub fn read(data: &[u8]) -> GFBSONResult<Root> {
-    Reader::new(data).read_root()
+/// Reads from a BSON file.
+pub fn read(data: &[u8], endian: Endianness) -> GFBSONResult<Root> {
+    Reader::new(data, endian).read_root()
 }
 
 #[cfg(feature = "json")]
@@ -243,19 +284,26 @@ struct Writer {
     // key, index
     string_map: HashMap<String, u32>,
     string_order: Vec<String>,
+    endian: Endianness,
 }
 
 impl Writer {
-    fn new() -> Self {
+    fn new(endian: Endianness) -> Self {
         Self {
             buffer: Vec::new(),
             string_map: HashMap::new(),
             string_order: Vec::new(),
+            endian: endian,
         }
     }
 
     fn write_u32(&mut self, val: u32) -> GFBSONResult<()> {
-        self.buffer.write_u32::<BigEndian>(val)?;
+        match self.endian {
+            Endianness::Big => self.buffer.write_u32::<BigEndian>(val)?,
+            Endianness::Little => self.buffer.write_u32::<LittleEndian>(val)?,
+            _ => unreachable!(),
+        }
+
         Ok(())
     }
 
@@ -321,12 +369,28 @@ impl Writer {
                     self.write_node(n)?;
                 }
             }
-            Node::Integer { value, .. } => {
-                self.buffer.write_i32::<BigEndian>(*value)?;
-            }
-            Node::Float { value, .. } => {
-                self.buffer.write_f32::<BigEndian>(*value)?;
-            }
+            Node::Integer { value, .. } => match self.endian {
+                Endianness::Big => {
+                    self.buffer.write_i32::<BigEndian>(*value)?;
+                }
+
+                Endianness::Little => {
+                    self.buffer.write_i32::<LittleEndian>(*value)?;
+                }
+
+                _ => unreachable!(),
+            },
+            Node::Float { value, .. } => match self.endian {
+                Endianness::Big => {
+                    self.buffer.write_f32::<BigEndian>(*value)?;
+                }
+
+                Endianness::Little => {
+                    self.buffer.write_f32::<LittleEndian>(*value)?;
+                }
+
+                _ => unreachable!(),
+            },
             Node::String { value, .. } => {
                 let val_idx = *self.string_map.get(value).unwrap();
                 self.write_u32(val_idx)?;
@@ -340,7 +404,17 @@ impl Writer {
         let end_pos = self.buffer.len();
         let size = (end_pos - start_pos - 8) as u32;
         let mut size_slice = &mut self.buffer[start_pos + 4..start_pos + 8];
-        size_slice.write_u32::<BigEndian>(size)?;
+
+        match self.endian {
+            Endianness::Big => {
+                size_slice.write_u32::<BigEndian>(size)?;
+            }
+            Endianness::Little => {
+                size_slice.write_u32::<LittleEndian>(size)?;
+            }
+
+            _ => unreachable!(),
+        }
 
         Ok(())
     }
@@ -366,7 +440,18 @@ impl Writer {
         let after_root_pos = self.buffer.len();
         let root_size = (after_root_pos - root_size_pos - 4) as u32;
         let mut root_size_slice = &mut self.buffer[root_size_pos..root_size_pos + 4];
-        root_size_slice.write_u32::<BigEndian>(root_size)?;
+
+        match self.endian {
+            Endianness::Big => {
+                root_size_slice.write_u32::<BigEndian>(root_size)?;
+            }
+
+            Endianness::Little => {
+                root_size_slice.write_u32::<LittleEndian>(root_size)?;
+            }
+
+            _ => unreachable!(),
+        }
 
         // write string table
         self.write_u32(RawNodeType::StringTable as u32)?;
@@ -403,14 +488,33 @@ impl Writer {
         // fill in size
         let total_size = self.buffer.len() as u32;
         let mut total_size_slice = &mut self.buffer[0xC..0x10];
-        total_size_slice.write_u32::<BigEndian>(total_size)?;
+
+        match self.endian {
+            Endianness::Big => {
+                total_size_slice.write_u32::<BigEndian>(total_size)?;
+            }
+
+            Endianness::Little => {
+                total_size_slice.write_u32::<LittleEndian>(total_size)?;
+            }
+
+            _ => unreachable!(),
+        }
 
         Ok(self.buffer)
     }
 }
 
-pub fn write(root: &Root, version: u32) -> GFBSONResult<Vec<u8>> {
-    Writer::new().write(root, version)
+/// Writes a BSON file from the root node.
+/// Using `Endianness::Auto` is not valid, and will instead be treated as `Endianness::Big`.
+pub fn write(root: &Root, version: u32, endian: Endianness) -> GFBSONResult<Vec<u8>> {
+    if matches!(endian, Endianness::Auto) {
+        eprintln!("Cannot use automatic endianness. Writing in big endian...");
+        Writer::new(Endianness::Big)
+    } else {
+        Writer::new(endian)
+    }
+    .write(root, version)
 }
 
 #[cfg(feature = "json")]
