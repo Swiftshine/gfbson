@@ -1,5 +1,10 @@
-use byteorder::{BigEndian, ReadBytesExt};
-use std::io::{Cursor, Seek};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use std::{
+    collections::HashMap,
+    io::{Cursor, Seek, Write},
+};
+
+const PLACEHOLDER_VALUE: u32 = 0xDEADCAFE;
 
 /* Utility */
 
@@ -18,6 +23,8 @@ pub enum GFBSONError {
 }
 
 pub type GFBSONResult<T> = Result<T, GFBSONError>;
+
+/* Reading */
 
 struct Reader<'a> {
     cursor: Cursor<&'a [u8]>,
@@ -218,6 +225,184 @@ impl<'a> Reader<'a> {
 
 pub fn read(data: &[u8]) -> GFBSONResult<Root> {
     Reader::new(data).read_root()
+}
+
+/* Writing */
+
+#[derive(Debug)]
+struct Writer {
+    buffer: Vec<u8>,
+    // key, index
+    string_map: HashMap<String, u32>,
+    string_order: Vec<String>,
+}
+
+impl Writer {
+    fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            string_map: HashMap::new(),
+            string_order: Vec::new(),
+        }
+    }
+
+    fn write_u32(&mut self, val: u32) -> GFBSONResult<()> {
+        self.buffer.write_u32::<BigEndian>(val)?;
+        Ok(())
+    }
+
+    fn collect_strings(&mut self, node: &Node) {
+        let mut add_string = |string: &String| {
+            if !self.string_map.contains_key(string) {
+                self.string_map
+                    .insert(string.clone(), self.string_order.len() as u32);
+                self.string_order.push(string.clone());
+            }
+        };
+
+        match node {
+            Node::Object { key, nodes } | Node::Array { key, nodes } => {
+                add_string(key);
+                for n in nodes {
+                    self.collect_strings(n);
+                }
+            }
+            Node::Integer { key, .. } | Node::Float { key, .. } | Node::Bool { key, .. } => {
+                add_string(key);
+            }
+            Node::String { key, value } => {
+                add_string(key);
+                add_string(value);
+            }
+        }
+    }
+
+    fn write_node(&mut self, node: &Node) -> GFBSONResult<()> {
+        let start_pos = self.buffer.len();
+
+        let node_type = match node {
+            Node::Object { .. } => RawNodeType::Object,
+            Node::Array { .. } => RawNodeType::Array,
+            Node::Integer { .. } => RawNodeType::Integer,
+            Node::Float { .. } => RawNodeType::Float,
+            Node::String { .. } => RawNodeType::String,
+            Node::Bool { .. } => RawNodeType::Bool,
+        };
+
+        self.write_u32(node_type as u32)?;
+        self.write_u32(PLACEHOLDER_VALUE)?; // size placeholder
+
+        // write key index
+        let key = match node {
+            Node::Object { key, .. }
+            | Node::Array { key, .. }
+            | Node::Integer { key, .. }
+            | Node::Float { key, .. }
+            | Node::String { key, .. }
+            | Node::Bool { key, .. } => key,
+        };
+
+        let key_index = *self.string_map.get(key).unwrap();
+        self.write_u32(key_index)?;
+
+        // write content
+        match node {
+            Node::Object { nodes, .. } | Node::Array { nodes, .. } => {
+                self.write_u32(nodes.len() as u32)?;
+                for n in nodes {
+                    self.write_node(n)?;
+                }
+            }
+            Node::Integer { value, .. } => {
+                self.buffer.write_i32::<BigEndian>(*value)?;
+            }
+            Node::Float { value, .. } => {
+                self.buffer.write_f32::<BigEndian>(*value)?;
+            }
+            Node::String { value, .. } => {
+                let val_idx = *self.string_map.get(value).unwrap();
+                self.write_u32(val_idx)?;
+            }
+            Node::Bool { value, .. } => {
+                self.write_u32(if *value { 1 } else { 0 })?;
+            }
+        }
+
+        // fill in size
+        let end_pos = self.buffer.len();
+        let size = (end_pos - start_pos - 8) as u32;
+        let mut size_slice = &mut self.buffer[start_pos + 4..start_pos + 8];
+        size_slice.write_u32::<BigEndian>(size)?;
+
+        Ok(())
+    }
+
+    fn write(mut self, root: &Root, version: u32) -> GFBSONResult<Vec<u8>> {
+        // collect all strings
+        self.collect_strings(&root.object_node);
+
+        // write header
+        self.buffer.write_all(b"BSON")?;
+        self.write_u32(version)?; // version?
+        self.write_u32(0x10)?; // root node offset
+        self.write_u32(PLACEHOLDER_VALUE)?; // size placeholder
+
+        // write root node
+        self.write_u32(RawNodeType::Root as u32)?;
+        let root_size_pos = self.buffer.len();
+        self.write_u32(PLACEHOLDER_VALUE)?; // root size placeholder
+
+        self.write_node(&root.object_node)?;
+
+        // fill in root node information
+        let after_root_pos = self.buffer.len();
+        let root_size = (after_root_pos - root_size_pos - 4) as u32;
+        let mut root_size_slice = &mut self.buffer[root_size_pos..root_size_pos + 4];
+        root_size_slice.write_u32::<BigEndian>(root_size)?;
+
+        // write string table
+        self.write_u32(RawNodeType::StringTable as u32)?;
+        self.write_u32(self.string_order.len() as u32 * 8)?;
+
+        let mut current_bank_offset = 0;
+        let mut string_bank_data = Vec::new();
+
+        for string in self.string_order.clone().iter() {
+            let bytes = string.as_bytes();
+            let len = (bytes.len() + 1) as u32; // +1 for null terminator
+            self.write_u32(current_bank_offset)?;
+            self.write_u32(len)?;
+
+            string_bank_data.extend_from_slice(bytes);
+            string_bank_data.push(0); // null terminator
+            current_bank_offset += len;
+        }
+
+        // make sure the string bank is 4-byte aligned
+        while string_bank_data.len() % 4 != 0 {
+            string_bank_data.push(0);
+        }
+
+        // string bank
+        self.write_u32(RawNodeType::StringBank as u32)?;
+        self.write_u32(string_bank_data.len() as u32)?;
+        self.buffer.extend_from_slice(&string_bank_data);
+
+        // EOF
+        self.write_u32(RawNodeType::EndOfFile as u32)?;
+        self.write_u32(0)?;
+
+        // fill in size
+        let total_size = self.buffer.len() as u32;
+        let mut total_size_slice = &mut self.buffer[0xC..0x10];
+        total_size_slice.write_u32::<BigEndian>(total_size)?;
+
+        Ok(self.buffer)
+    }
+}
+
+pub fn write(root: &Root, version: u32) -> GFBSONResult<Vec<u8>> {
+    Writer::new().write(root, version)
 }
 
 /* Intermediate Structures */

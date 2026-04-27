@@ -1,17 +1,17 @@
 use std::{env, fs};
 
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 2 {
+    if args.len() != 3 {
         return Err("Need to specify filename.".into());
     }
 
     let data = fs::read(&args[1])?;
-    let bson = gfbson::read(&data)?;
+    let root = gfbson::read(&data)?;
+    let bytes = gfbson::write(&root, 3)?;
 
-    println!("{:#?}", bson);
+    fs::write(&args[2], bytes)?;
 
     Ok(())
 }
