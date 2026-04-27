@@ -294,7 +294,7 @@ impl Writer {
             buffer: Vec::new(),
             string_map: HashMap::new(),
             string_order: Vec::new(),
-            endian: endian,
+            endian,
         }
     }
 
