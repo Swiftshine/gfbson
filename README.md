@@ -1,6 +1,6 @@
 # gfbson
 
-A Rust crate for parsing Good-Feel's BSON files.
+A Rust crate for parsing Good-Feel's BSON files, found in _Yoshi's Woolly World_ and _Poochy and Yoshi's Woolly World_.
 
 ## Features
 
