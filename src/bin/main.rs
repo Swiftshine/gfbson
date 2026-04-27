@@ -7,10 +7,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Need to specify filename.".into());
     }
 
-    let data = fs::read(&args[1])?;
-    let root = gfbson::read(&data)?;
-    let json_output = gfbson::to_json(&root, true)?;
-    fs::write(&args[2], json_output)?;
+    let data = fs::read_to_string(&args[1])?;
+    let root = gfbson::from_json(&data)?;
+    let bytes = gfbson::write(&root, 3)?;
+
+    fs::write(&args[2], bytes)?;
+
+    // let root = gfbson::read(&data)?;
+    // let json_output = gfbson::to_json(&root, true)?;
+    // fs::write(&args[2], json_output)?;
     // let bytes = gfbson::write(&root, 3)?;
 
     // fs::write(&args[2], bytes)?;

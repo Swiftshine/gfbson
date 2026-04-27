@@ -230,8 +230,9 @@ pub fn read(data: &[u8]) -> GFBSONResult<Root> {
 }
 
 #[cfg(feature = "json")]
-pub fn from_json(json_str: &str) -> serde_json::Result<Root> {
-    serde_json::from_str(json_str)
+pub fn from_json(json_str: &str) -> Result<Root, serde_json::Error> {
+    let v: serde_json::Value = serde_json::from_str(json_str)?;
+    Ok(Root::from_json_value(v))
 }
 
 /* Writing */
@@ -483,6 +484,15 @@ impl Serialize for Root {
     }
 }
 
+#[cfg(feature = "serde")]
+impl Root {
+    pub fn from_json_value(value: serde_json::Value) -> Self {
+        Self {
+            object_node: Node::from_json_pair("".to_string(), value),
+        }
+    }
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(Deserialize))]
 #[cfg_attr(feature = "serde", serde(tag = "type", rename_all = "lowercase"))]
@@ -530,6 +540,7 @@ impl Serialize for Node {
     }
 }
 
+#[cfg(feature = "serde")]
 impl Node {
     pub fn key(&self) -> &str {
         match self {
@@ -539,6 +550,44 @@ impl Node {
             | Node::Float { key, .. }
             | Node::String { key, .. }
             | Node::Bool { key, .. } => key,
+        }
+    }
+
+    fn from_json_pair(key: String, value: serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Object(map) => {
+                let nodes = map
+                    .into_iter()
+                    .map(|(k, v)| Node::from_json_pair(k, v))
+                    .collect();
+                Node::Object { key, nodes }
+            }
+            serde_json::Value::Array(vec) => {
+                let nodes = vec
+                    .into_iter()
+                    .map(|v| Node::from_json_pair("".to_string(), v)) // arrays get empty keys
+                    .collect();
+                Node::Array { key, nodes }
+            }
+            serde_json::Value::String(s) => Node::String { key, value: s },
+            serde_json::Value::Bool(b) => Node::Bool { key, value: b },
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Node::Integer {
+                        key,
+                        value: i as i32,
+                    }
+                } else {
+                    Node::Float {
+                        key,
+                        value: n.as_f64().unwrap_or(0.0) as f32,
+                    }
+                }
+            }
+            serde_json::Value::Null => Node::String {
+                key,
+                value: "null".to_string(),
+            },
         }
     }
 }

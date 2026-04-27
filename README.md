@@ -12,7 +12,7 @@ A Rust crate for parsing Good-Feel's BSON files.
         - [x] Big Endian
         - [ ] Little Endian
 - [x] JSON Files
-    - [ ] Reading
+    - [x] Reading
     - [x] Writing
 
 To access JSON parsing, use the `json` feature when adding this crate to your project.
